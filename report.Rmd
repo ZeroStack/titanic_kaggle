@@ -1,0 +1,350 @@
+# Kaggle: Titantic Predicting Likelyhood of Survival
+Set R options
+```{r}
+echo = TRUE
+```
+
+Load Relevant Libraries
+```{r}
+# Better looking decision tree
+library(rattle)
+# Plotting library
+library(ggplot2)
+# Recursive Partitioning and Regression Trees
+library(rpart)
+# String processing
+library(stringr)
+# Data processing
+library(dplyr)
+# Random forest
+library(randomForest)
+```
+
+
+## Initial Data Exploration
+
+Load Data
+```{r}
+# Training set
+train <- read.csv(url("http://s3.amazonaws.com/assets.datacamp.com/course/Kaggle/train.csv"), na.string = c(" ", "", "NA"))
+  
+# Test set
+test <- read.csv(url("http://s3.amazonaws.com/assets.datacamp.com/course/Kaggle/test.csv"),na.string = c(" ", "", "NA"))
+```
+
+Check Data
+```{r}
+# Check dimensions
+# Train
+dim(train)
+# Test
+dim(test)
+
+# Column names
+# Train
+names(train)
+# Test
+names(test)
+```
+
+The noticable difference between the test and training dataset, is that the test data does not have a 'Survived Column'
+
+Checking the column classes of the data ahead of analysis.
+```{r}
+# Train data column classes
+lapply(train, class)
+
+# Test data column classes
+lapply(test, class)
+```
+
+Let us check na values for every variable, TRUE indicates there is a na value
+```{r}
+# Train
+# Na summary for every variable
+summary(is.na(train))
+# TOtal na values in the train data
+sum(is.na(train))
+
+# Test
+# Na summary for every variable
+summary(is.na(test))
+# Total na values in the test data
+sum(is.na(test))
+
+```
+
+Let us look at the Survival rate: 1 indicates Survival
+```{r}
+survival.summary <- table(train$Survived)
+survival.summary
+```
+In the dataset, there were 891 Passengers, of which 342 Survived.
+
+## Merging the datasets
+
+We will need to apply our analysis to both the training and test datasets in a uniform fashion. This is so when we apply our algorithm built on the training set, any new variables will also exist in the test set (provided they are reproducible). 
+
+The test data in the combined dataset will be distinguished where the Survival column is a NA Value
+
+```{r}
+# Bind the test and training set
+all.data <- merge(train, test, all = TRUE)
+```
+
+Confirm new data has dimensions that include all columns and has the combined row count of the test and training set
+
+```{r}
+
+dim(all.data)
+nrow(train) + nrow(test) == nrow(all.data)
+```
+
+The all.data now holds the combined training and test dataset. 
+
+```{r}
+summary(is.na(all.data))
+```
+
+
+## Dealing with NA Values
+
+Bear in mind the Survival NA values are indicative of the test data set. So we will discount them when dealing with NA values.
+
+With this, the total NA values are:
+```{r}
+sum(is.na(all.data)) - sum(is.na(all.data$Survived))
+```
+
+We could omit these rows of data, but we would be ridding ourselves of valuable data. 
+
+Instead, we will try and fill the existing data where na values are present
+
+### Embarked
+
+Number of na values in the Embarked column are represented below
+```{r}
+summary(all.data$Embarked)
+ggplot(all.data, aes(Embarked)) + geom_histogram()
+```
+
+Most people embarked from Southampton, we will just assume missing values embarked from there.
+
+```{r}
+all.data$Embarked[is.na(all.data$Embarked)] <- "S"
+# Confirm no NA values remain
+sum(is.na(all.data$Embarked))
+```
+
+### Fare
+
+Number of na values in the Fare column are represented below
+
+```{r}
+summary(all.data$Fare)
+ggplot(all.data, aes(Fare)) + geom_histogram()
+```
+
+Here, we will assign the median fare value to the overall dataset
+
+```{r}
+all.data$Fare[is.na(all.data$Fare)] <- median(all.data$Fare, na.rm = TRUE)
+# COnfirm NA values are non-existant in the Fare column
+sum(is.na(all.data$Fare))
+```
+
+### Age
+
+We will deal with age when we have more features engineered.
+
+
+### Cabin
+
+The Cabin variable is represented below in the the combined dataset
+
+```{r}
+# Total NA values in the Cabin variable
+sum(is.na(all.data$Cabin))
+
+# There are too many missing Cabin variables, so we will delete this column
+
+all.data$Cabin <- NULL
+
+```
+
+
+## Feature Engineering
+
+In my view feature engineering is the most important factor in a machine learning algorithm (with my knowledge to date). Significant features need to be built that summarise the data well.
+
+WIth this, let us look at the data as it stands now:
+```{r}
+head(train)
+```
+
+Briefly, do any additional variables come to mind that can be built on the existing variables that add some insight to the dataset?
+
+I can deduce the following: Title (factor), Child (0 or 1), Family Size (numeric).
+
+
+### Add Family Size
+
+Add family size by adding together SibSb + Parch + 1
+```{r}
+all.data$FamilySize <- all.data$SibSp + all.data$Parch + 1
+# Visualise family size
+ggplot(all.data, aes(FamilySize)) + geom_histogram()
+```
+
+### Add Passenger Title
+```{r}
+all.data <- mutate(all.data, Title = str_extract(Name, "(Jonkheer|Capt|Countess|Col|Mlle|Major|Don|Sir|Master|Dr|Rev|Mme|Ms|Miss|Mrs|Mr)"))
+
+# COerce characters to factors
+all.data$Title <- as.factor(all.data$Title)
+
+# Visualise Title
+ggplot(all.data, aes(Title)) + geom_histogram()
+```
+
+### Age continued
+
+The age variable is represented below in the the combined dataset
+
+```{r}
+# Total NA values in the age variable
+sum(is.na(all.data$Age))
+
+# Plot age variable to get a sense of it
+ggplot(all.data, aes(Age)) + geom_histogram()
+
+# Use decision tree to predict age, we will set method to "anova" since we are trying to predict a continous variable
+
+predicted_age <- rpart(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Title + FamilySize, data = all.data[!is.na(all.data$Age), ], method = "anova")
+
+# VIew results
+predicted_age
+
+# Predict age where values are NA
+all.data$Age[is.na(all.data$Age)] <- predict(predicted_age, all.data[is.na(all.data$Age), ])
+
+# COnfirm NA values have been dealt with
+sum(is.na(all.data$Age))
+```
+
+### Adding Child Variable
+
+If the age of a passenger is below 18, they are a child.
+
+```{r}
+# Assign child as under 18
+all.data$Child[all.data$Age < 18] <- 1
+# Assign not child over 18
+all.data$Child[all.data$Age > 18] <- 0
+# People who are 18 are considered adults
+all.data$Child[all.data$Age == 18] <- 1
+
+```
+
+Check summary of new child variable
+```{r}
+ggplot(all.data, aes(Child)) + geom_histogram()
+table(all.data$Child)
+```
+
+
+## View final combined data set
+
+Lets view the final data
+
+```{r}
+lapply(all.data, class)
+```
+
+## General Algorithm Guidelines
+
+"Psychologist Gord Gigerenzer cautions that in uncertain markets, it is better to simplify, use heuristics and rely on fewer variables. In stable and predictable markets, on the other hand, he recomends organizations 'complexity' and use algorithms with more variables"
+
+## Split data back into training and test
+```{r}
+# Assign train set
+train <- all.data[!is.na(all.data$Survived),]
+
+#Assign test set
+test <- all.data[is.na(all.data$Survived),]
+test$Survived <- NULL
+
+# Ensure all data has been assigned
+nrow(all.data) == nrow(train) + nrow(test)
+```
+## First ML Algorithm: Decission Tree
+
+```{r}
+# Train Decision Tree
+modTreeOne <- rpart(Survived ~ Title + FamilySize + Child + Embarked + Parch + SibSp + Fare + Age + Sex + Name + Pclass, data = train, method = "class")
+
+# Visualise tree
+fancyRpartPlot(modTree)
+
+# Predict
+treePredOne <- predict(modTreeOne, test, type = "class")
+
+# Create Solution
+TreeSolOne <- data.frame(PassengerId = test$PassengerId, Survived = treePredOne)
+
+# Create csv file
+write.csv(TreeSolOne, "TreeSolOne.csv", row.names = FALSE)
+
+```
+This submission scored 75.598% on Kaggle
+
+## Second ML Algorithm: Let's overfit
+
+To demonstrate the consequences of overfitting, we will adjust the parameters in our decision tree algorithm.
+
+```{r}
+# Train second tree
+modTreeTwo <- rpart(Survived ~ Title + FamilySize + Child + Embarked + Parch + SibSp + Fare + Age + Sex + Name + Pclass, data = train, method = "class", control=rpart.control(minsplit=50, cp=0))
+
+# Viualise second tre
+fancyRpartPlot(modTreeTwo)
+
+# Predict the second tree
+treePredTwo <- predict(modTreeTwo, test, type = "class") 
+
+# Create Solution
+TreeSolTwo <- data.frame(PassengerId = test$PassengerId, Survived = treePredTwo)
+
+# Create submission file
+write.csv(TreeSolTwo, "TreeSolTwo.csv", row.names = FALSE)
+```
+
+This solution scored 75.598%
+
+## Third ML Algorithm: Random Forest
+
+Following we will deploy a random forest algorithm to predict survival
+
+```{r}
+# Set seed for reproducibility
+set.seed(111)
+
+# Train random forest
+modForest <- randomForest(as.factor(Survived) ~ Pclass + Child + FamilySize + Sex + Age + SibSp + Parch + Embarked + Title, data = train, importance = TRUE, ntree = 1000)
+
+# Predict random forest
+predForest <- predict(modForest, test)
+
+# Create a solution
+ForSolOne <- data.frame(PassengerId = test$PassengerId, Survived = predForest )
+
+# Create solution for kaggle
+write.csv(ForSolOne, "ForSolOne.csv", row.names = FALSE)
+
+# Make Visualisation of Improtant Variables
+
+varImpPlot(modForest)
+
+```
+
+This scored 77.990% on Kaggle
